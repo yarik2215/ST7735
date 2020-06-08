@@ -3,7 +3,23 @@
 #define __ST7735_H__
 
 #include "fonts.h"
+#include "stm32f1xx.h"	//add header for your mcu series
 //#include <stdbool.h>
+
+typedef struct {
+	uint32_t width;
+	uint32_t heigth;
+
+	SPI_TypeDef *ST7735_SPI;
+	uint16_t ST7735_CS_PIN;
+	GPIO_TypeDef*	ST7735_CS_PORT;
+	uint16_t ST7735_D_PIN;
+	GPIO_TypeDef*	ST7735_D_PORT;
+	uint16_t ST7735_RST_PIN;
+	GPIO_TypeDef*	ST7735_RST_PORT;
+
+} Display;
+
 
 /******* Display list *********/
 #define ST7735_160X128

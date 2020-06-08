@@ -1,9 +1,10 @@
-/* vim: set ai et ts=4 sw=4: */
+
 #include "stm32f1xx_hal.h"
 #include "stm32f1xx_ll_spi.h"
 #include "stm32f1xx_ll_gpio.h"
+#include <string.h>
 #include "st7735.h"
-//#include "math.h"
+#include <stdlib.h>
 
 #define DELAY 0x80
 
@@ -14,6 +15,8 @@ static uint16_t ST7735_D_PIN;
 static GPIO_TypeDef*	ST7735_D_PORT;
 static uint16_t ST7735_RST_PIN;
 static GPIO_TypeDef*	ST7735_RST_PORT;
+
+
 /*
 void HAL_Delay(uint32_t x)
 {
@@ -26,9 +29,15 @@ void HAL_Delay(uint32_t x)
 
 /*** Function definition ***/
 #define SWAP(x1,x2) {uint32_t x3 = (x1); (x1) = (x2); (x2) = x3;}
-static void ST7735_WriteCommand(uint8_t cmd);
-static void ST7735_WriteData(uint8_t* buff, uint32_t buff_size);
+static inline void ST7735_WriteCommand(uint8_t cmd);
+static inline void ST7735_WriteData(uint8_t* buff, uint32_t buff_size);
 
+
+#define TEMP_BUFF_SIZE 128
+typedef struct{
+	uint8_t buff8t[TEMP_BUFF_SIZE*2];
+	uint16_t counter;
+}Buffer;
 
 // based on Adafruit ST7735 library for Arduino
 static const uint8_t
@@ -69,7 +78,6 @@ static const uint8_t
     ST7735_COLMOD , 1      ,  // 15: set color mode, 1 arg, no delay:
       0x05 },                 //     16-bit color
 
-#if (defined(ST7735_128X128) || defined(ST7735_160X128))
   init_cmds2[] = {            // Init for 7735R, part 2 (1.44" display)
     2,                        //  2 commands in list:
     ST7735_CASET  , 4      ,  //  1: Column addr set, 4 args, no delay:
@@ -78,19 +86,6 @@ static const uint8_t
     ST7735_RASET  , 4      ,  //  2: Row addr set, 4 args, no delay:
       0x00, 0x00,             //     XSTART = 0
       0x00, 0x7F },           //     XEND = 127
-#endif // ST7735_IS_128X128
-
-#ifdef ST7735_160X80
-  init_cmds2[] = {            // Init for 7735S, part 2 (160x80 display)
-    3,                        //  3 commands in list:
-    ST7735_CASET  , 4      ,  //  1: Column addr set, 4 args, no delay:
-      0x00, 0x00,             //     XSTART = 0
-      0x00, 0x4F,             //     XEND = 79
-    ST7735_RASET  , 4      ,  //  2: Row addr set, 4 args, no delay:
-      0x00, 0x00,             //     XSTART = 0
-      0x00, 0x9F ,            //     XEND = 159
-    ST7735_INVON, 0 },        //  3: Invert colors
-#endif
 
   init_cmds3[] = {            // Init for 7735R, part 3 (red or green tab)
     4,                        //  4 commands in list:
@@ -110,21 +105,24 @@ static const uint8_t
       100 };                  //     100 ms delay
 
 
-static void ST7735_WriteCommand(uint8_t cmd) {
+static inline void ST7735_WriteCommand(uint8_t cmd) {
+//	while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI));
 	LL_GPIO_ResetOutputPin(ST7735_D_PORT, ST7735_D_PIN);
-	while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI));
 	LL_SPI_TransmitData8(ST7735_SPI, cmd);
-	while(LL_SPI_IsActiveFlag_BSY(ST7735_SPI));
+	while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI) || LL_SPI_IsActiveFlag_BSY(ST7735_SPI));
 }
 
 
-static void ST7735_WriteData(uint8_t* buff, uint32_t buff_size) {
+static inline void ST7735_WriteData(uint8_t* buff, uint32_t buff_size) {
 	for(uint16_t i = 0; i < buff_size; i++) {
+//		while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI));
 		LL_GPIO_SetOutputPin(ST7735_D_PORT, ST7735_D_PIN);
-		while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI));
 		LL_SPI_TransmitData8(ST7735_SPI, buff[i]);
-		while(LL_SPI_IsActiveFlag_BSY(ST7735_SPI));
+		while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI));
+//		while(!LL_SPI_IsActiveFlag_TXE(ST7735_SPI) && LL_SPI_IsActiveFlag_BSY(ST7735_SPI));
+//		while(!(ST7735_SPI->SR & SPI_SR_BSY) || ST7735_SPI->SR & SPI_SR_TXE);
 	}
+	while(LL_SPI_IsActiveFlag_BSY(ST7735_SPI));
 }
 
 void ST7735_Select() {
@@ -151,30 +149,31 @@ void ST7735_InvertColors(uint8_t invert) {
 }
 
 
-static void ST7735_ExecuteCommandList(const uint8_t *addr) {
-    uint8_t numCommands, numArgs;
-    uint16_t ms;
+static void ST7735_ExecuteCommandList(const uint8_t *addr)
+{
+	uint8_t numCommands, numArgs;
+	    uint16_t ms;
 
-    numCommands = *addr++;
-    while(numCommands--) {
-        uint8_t cmd = *addr++;
-        ST7735_WriteCommand(cmd);
+	    numCommands = *addr++;
+	    while(numCommands--) {
+	        uint8_t cmd = *addr++;
+	        ST7735_WriteCommand(cmd);
 
-        numArgs = *addr++;
-        // If high bit set, delay follows args
-        ms = numArgs & DELAY;
-        numArgs &= ~DELAY;
-        if(numArgs) {
-            ST7735_WriteData((uint8_t*)addr, numArgs);
-            addr += numArgs;
-        }
+	        numArgs = *addr++;
+	        // If high bit set, delay follows args
+	        ms = numArgs & DELAY;
+	        numArgs &= ~DELAY;
+	        if(numArgs) {
+	            ST7735_WriteData((uint8_t*)addr, numArgs);
+	            addr += numArgs;
+	        }
 
-        if(ms) {
-            ms = *addr++;
-            if(ms == 255) ms = 500;
-            HAL_Delay(ms);
-        }
-    }
+	        if(ms) {
+	            ms = *addr++;
+	            if(ms == 255) ms = 500;
+	            HAL_Delay(ms);
+	        }
+	    }
 }
 
 
@@ -217,6 +216,8 @@ void ST7735_Init(SPI_TypeDef *SPIx, uint16_t csPin, GPIO_TypeDef *csPort, uint16
 	ST7735_RST_PIN = rstPin;
 	ST7735_RST_PORT = rstPort;
 	LL_SPI_Enable(ST7735_SPI);
+//	ST7735_SPI->CR1 |= SPI_CR1_SPE;
+	HAL_Delay(50);
     ST7735_Select();
     ST7735_Reset();
     ST7735_ExecuteCommandList(init_cmds1);
@@ -374,12 +375,23 @@ void ST7735_FillRectangle(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t
 
     ST7735_Select();
     ST7735_SetAddressWindow(x, y, x+w-1, y+h-1);
-    uint8_t data[] = { color >> 8, color & 0xFF };
+//    Buffer data;
+   uint8_t invColor[] = { color >> 8, color & 0xFF };
+   uint16_t data[128] = {};
+   uint8_t counter = 0;
+
     for(y = h; y > 0; y--) {
         for(x = w; x > 0; x--) {
-        	ST7735_WriteData(data, sizeof(data));
+        	data[counter] = *((uint16_t*)invColor);
+        	counter ++;
+        	if(counter == 128) {
+            	ST7735_WriteData((uint8_t*)data, counter*2);
+            	counter = 0;
+        	}
         }
     }
+    if(counter)
+    	ST7735_WriteData((uint8_t*)data, counter*2);
     ST7735_Unselect();
 }
 
